@@ -1,15 +1,7 @@
-import type { LucideIcon } from 'lucide-react';
 import {
   BadgeDollarSign,
-  CalendarClock,
-  Coffee,
   Gift,
-  History,
-  Send,
-  ShoppingBag,
   Sparkles,
-  Users,
-  Wallet,
 } from 'lucide-react';
 
 export type Category = 'hot' | 'cold' | 'tea' | 'bakery' | 'snack' | 'dessert';
@@ -30,14 +22,6 @@ export type BalancePackage = {
   bonus: number;
   label: string;
   note: string;
-};
-
-export type Action = {
-  id: string;
-  title: string;
-  caption: string;
-  icon: LucideIcon;
-  screen: string;
 };
 
 export const categories = [
@@ -126,61 +110,22 @@ export const packages: BalancePackage[] = [
   { amount: 5000, bonus: 1500, label: 'Максимальная выгода', note: 'Лучший пакет для команды или семьи.' },
 ];
 
-export const quickActions: Action[] = [
-  { id: 'usual', title: 'Повторить заказ', caption: 'Капучино + круассан', icon: ShoppingBag, screen: 'menu' },
-  { id: 'auto', title: 'Автозаказ', caption: 'Будни в 08:30', icon: CalendarClock, screen: 'auto' },
-  { id: 'gift', title: 'Подарить кофе', caption: 'Контакту Telegram', icon: Gift, screen: 'gift' },
-  { id: 'invite', title: 'Пригласить друга', caption: '+100 грн обоим', icon: Send, screen: 'referrals' },
-];
-
-export const upcomingOrders = [
-  { id: 'o1', title: 'Капучино Flat Foam', when: 'Сегодня, 08:30', status: 'Автозаказ ждет подтверждения' },
-  { id: 'o2', title: 'Latte + Almond', when: 'Пт, 12:15', status: 'Предзаказ к времени' },
-];
-
 export const orderHistory = [
   { id: 'h1', title: 'Капучино + круассан', date: 'Вчера', price: 190, code: '4831' },
   { id: 'h2', title: 'Iced Espresso Tonic', date: '3 июня', price: 128, code: '2914' },
   { id: 'h3', title: 'Латте Vanilla Cloud', date: '31 мая', price: 112, code: '7302' },
 ];
 
-export const referralFriends = [
-  { name: 'Анна', status: 'Первый заказ оплачен', reward: 100 },
-  { name: 'Максим', status: 'Ждет первый заказ', reward: 0 },
-  { name: 'Лена', status: 'Первый заказ оплачен', reward: 100 },
-];
-
 export const operations = [
   { title: 'Пополнение 1000 грн', meta: '+150 грн бонус', value: '+1150' },
   { title: 'Капучино Flat Foam', meta: 'Оплата балансом', value: '-98' },
   { title: 'Подарок для Анны', meta: 'Кофе отправлен', value: '-112' },
-  { title: 'Реферальная награда', meta: 'Друг сделал заказ', value: '+100' },
-];
-
-export const adminStats = [
-  { title: 'Заказы сегодня', value: '184', icon: Coffee },
-  { title: 'Клиенты', value: '3 842', icon: Users },
-  { title: 'Пополнения', value: '128 400 грн', icon: Wallet },
-  { title: 'Подарки', value: '46', icon: Gift },
-  { title: 'Рефералы', value: '219', icon: BadgeDollarSign },
-  { title: 'Повторы', value: '71%', icon: History },
-];
-
-export const adminRows = [
-  ['4831', 'Капучино + круассан', '08:30', 'Готовится'],
-  ['7710', 'Iced Tonic', '08:42', 'Оплачен'],
-  ['1048', 'Latte + Basque', '09:05', 'Ожидает'],
-];
-
-export const valueSteps = [
-  { title: 'Без очереди', text: 'Оформляешь в Telegram, забираешь по коду у бариста.' },
-  { title: 'Баланс выгоднее', text: 'Пополняешь заранее и получаешь больше денег на кофе.' },
-  { title: 'Предзаказ', text: 'Выбираешь сейчас, через 15 минут или точное время.' },
-  { title: 'Подарки и друзья', text: 'Отправляешь кофе контакту, а рефералка начисляет бонусы обоим.' },
+  { title: 'Реферальная награда', meta: 'Выведено из партнерки', value: '+200' },
 ];
 
 export const successCopy = {
   order: { icon: Sparkles, title: 'Заказ оплачен', text: 'Назови код бариста. Напиток уже в очереди приготовления.' },
   gift: { icon: Gift, title: 'Кофе отправлен', text: 'Получатель увидит подарок в Telegram и сможет забрать по коду.' },
-  reward: { icon: BadgeDollarSign, title: 'Награда начислена', text: '100 грн добавлены на кофейный баланс.' },
+  receivedGift: { icon: Gift, title: 'Подарок активирован', text: 'Подарок сохранен в профиле. Когда будешь в кофейне, получи код выдачи.' },
+  reward: { icon: BadgeDollarSign, title: 'Награда выведена', text: 'Партнерская сумма переведена на кофейный баланс.' },
 };

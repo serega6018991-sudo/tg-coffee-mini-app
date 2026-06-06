@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "qa:invariants": "node scripts/qa-invariants.mjs",
+    "qa": "npm run build && npm run qa:invariants"
   },
   "dependencies": {
     "@fontsource/manrope": "^5.2.8",

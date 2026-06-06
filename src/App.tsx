@@ -1,30 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  ArrowRight,
   BadgeCheck,
   Banknote,
   CakeSlice,
-  CalendarClock,
-  Check,
   ChevronRight,
-  Clock3,
   Coffee,
-  Contact,
   Croissant,
   Gift,
-  Grid2X2,
   History,
   Home,
   Leaf,
   Minus,
-  PanelRight,
   Plus,
   QrCode,
-  Repeat2,
-  ScanLine,
   Send,
   Settings2,
-  ShieldCheck,
   ShoppingBag,
   Snowflake,
   Trash2,
@@ -34,18 +24,12 @@ import {
   X,
 } from 'lucide-react';
 import {
-  adminRows,
-  adminStats,
   categories,
   operations,
   orderHistory,
   packages,
   products,
-  quickActions,
-  referralFriends,
   successCopy,
-  upcomingOrders,
-  valueSteps,
   type Category,
   type Product,
 } from './data';
@@ -53,8 +37,9 @@ import { bootTelegramMiniApp, impact, notify, selection } from './telegram';
 
 type Screen = 'home' | 'menu' | 'orders' | 'profile';
 type TimeMode = 'now' | '15' | 'time';
-type AppSheet = 'auto' | 'gift' | 'topup' | 'referral' | 'checkout' | 'settings' | null;
+type AppSheet = 'gift' | 'giftReceive' | 'topup' | 'referral' | 'checkout' | 'settings' | 'orderDetails' | 'queue' | null;
 type PaymentMethod = 'balance' | 'card';
+type ActiveOrderMode = 'merge' | 'separate';
 type CartItem = Product & { lineId: string; quantity: number; size: string; syrup: string; extraShot: boolean };
 type SuccessKind = keyof typeof successCopy;
 
@@ -73,19 +58,24 @@ function classNames(...names: Array<string | false | null | undefined>) {
 }
 
 export function App() {
-  const [screen, setScreen] = useState<Screen>('home');
+  const [screen, setScreen] = useState<Screen>('menu');
   const [category, setCategory] = useState<Category>('hot');
   const [selected, setSelected] = useState<Product | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [balance, setBalance] = useState(1250);
   const [animatedBalance, setAnimatedBalance] = useState(1250);
-  const [timeMode, setTimeMode] = useState<TimeMode>('15');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
+  const [timeMode, setTimeMode] = useState<TimeMode | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
+  const [activeOrderMode, setActiveOrderMode] = useState<ActiveOrderMode | null>(null);
   const [sheet, setSheet] = useState<AppSheet>(null);
   const [success, setSuccess] = useState<SuccessKind | null>(null);
   const [pickupCode, setPickupCode] = useState('4831');
   const [giftMode, setGiftMode] = useState<'drink' | 'amount'>('drink');
+  const [giftProductId, setGiftProductId] = useState(products[1].id);
+  const [topUpAmount, setTopUpAmount] = useState(packages[1].amount);
+  const [referralRewardAvailable, setReferralRewardAvailable] = useState(200);
   const [toast, setToast] = useState('');
+  const [topbarScrolled, setTopbarScrolled] = useState(false);
   const toastTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -106,9 +96,21 @@ export function App() {
     window.scrollTo(0, 0);
   }, [screen]);
 
+  useEffect(() => {
+    const updateTopbar = () => setTopbarScrolled(window.scrollY > 8);
+    updateTopbar();
+    window.addEventListener('scroll', updateTopbar, { passive: true });
+    return () => window.removeEventListener('scroll', updateTopbar);
+  }, []);
+
   const filtered = products.filter((product) => product.category === category);
   const activeCategoryTitle = categories.find((item) => item.id === category)?.title ?? 'Каталог';
-  const popular = products.filter((product) => product.popular);
+  const activeOrderItems = useMemo(() => [
+    { product: products[0], quantity: 1 },
+    { product: products[4], quantity: 1 },
+    { product: products[1], quantity: 1 },
+    { product: products[6], quantity: 1 },
+  ], []);
   const total = cart.reduce((sum, item) => sum + (item.price + (item.extraShot ? 25 : 0)) * item.quantity, 0);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -161,17 +163,65 @@ export function App() {
     });
   };
 
+  const incrementCartLine = (lineId: string) => {
+    impact('light');
+    setCart((items) => items.map((item) => (item.lineId === lineId ? { ...item, quantity: item.quantity + 1 } : item)));
+  };
+
+  const decrementCartLine = (lineId: string) => {
+    impact('light');
+    setCart((items) => {
+      const next = items.flatMap((item) => {
+        if (item.lineId !== lineId) return [item];
+        if (item.quantity <= 1) return [];
+        return [{ ...item, quantity: item.quantity - 1 }];
+      });
+      if (!next.length) window.setTimeout(() => setSheet(null), 0);
+      return next;
+    });
+  };
+
+  const clearCart = () => {
+    impact('medium');
+    setCart([]);
+    setSheet(null);
+    showToast('Корзина очищена');
+  };
+
   const checkout = () => {
     if (!cart.length) {
       addToCart(products[0]);
       return;
     }
-    const code = String(Math.floor(1000 + Math.random() * 8999));
+    if (!timeMode) {
+      showToast('Выбери время приготовления');
+      notify('error');
+      return;
+    }
+    if (!paymentMethod) {
+      showToast('Выбери способ оплаты');
+      notify('error');
+      return;
+    }
+    if (!activeOrderMode) {
+      showToast('Выбери: добавить к текущему заказу или оформить отдельно');
+      notify('error');
+      return;
+    }
+    if (paymentMethod === 'balance' && balance < total) {
+      showToast('На балансе не хватает денег. Пополни баланс или выбери карту');
+      notify('error');
+      return;
+    }
+    const code = activeOrderMode === 'merge' ? pickupCode : String(Math.floor(1000 + Math.random() * 8999));
     setPickupCode(code);
     if (paymentMethod === 'balance') {
       setBalance((value) => Math.max(0, value - total));
     }
     setCart([]);
+    setTimeMode(null);
+    setPaymentMethod(null);
+    setActiveOrderMode(null);
     setSheet(null);
     notify('success');
     setSuccess('order');
@@ -183,11 +233,40 @@ export function App() {
     setSheet(null);
   };
 
+  const openTopUp = (amount = packages[1].amount) => {
+    selection();
+    setTopUpAmount(amount);
+    setSheet('topup');
+  };
+
+  const openGift = (product?: Product) => {
+    selection();
+    if (product) {
+      setGiftMode('drink');
+      setGiftProductId(product.id);
+    }
+    setSheet('gift');
+  };
+
+  const withdrawReferralReward = () => {
+    selection();
+    if (referralRewardAvailable <= 0) {
+      showToast('В партнерке пока нет суммы к выводу');
+      return;
+    }
+    const amount = referralRewardAvailable;
+    setBalance((value) => value + amount);
+    setReferralRewardAvailable(0);
+    setSheet(null);
+    notify('success');
+    setSuccess('reward');
+  };
+
   const isPrimaryScreen = (['home', 'menu', 'orders', 'profile'] as Screen[]).includes(screen);
 
   return (
     <div className="app">
-      <header className="topbar">
+      <header className={classNames('topbar', topbarScrolled && 'scrolled')}>
         <button className="icon-button ghost" onClick={() => (isPrimaryScreen ? go('profile') : go('home'))} aria-label={isPrimaryScreen ? 'Профиль' : 'Назад'}>
           {isPrimaryScreen ? <span className="avatar-photo" /> : <X size={20} />}
         </button>
@@ -195,7 +274,7 @@ export function App() {
           <div className="brand">{screen === 'home' ? 'Доброе утро' : 'TG Coffee'}</div>
           <div className="branch">Арсенальная · 4 мин</div>
         </div>
-        <button className="balance-chip" onClick={() => go('profile')}>
+        <button className="balance-chip" onClick={() => openTopUp()}>
           <Wallet size={16} />
           {money(animatedBalance)}
         </button>
@@ -222,42 +301,36 @@ export function App() {
       <main className="screen-shell">
         {screen === 'home' && (
           <section className="screen enter">
-            <HomeBanners onOrder={() => { addToCart(popular[0]); go('menu'); }} onInvite={() => setSheet('referral')} product={popular[0]} />
-            <HomeActionTiles
-              onRepeat={() => { addToCart(products[0]); addToCart(products[4]); go('menu'); }}
-              onAuto={() => setSheet('auto')}
+            <BeginnerHome
+              onMenu={() => go('menu')}
+              onTopUp={() => openTopUp()}
+              onGift={() => openGift()}
               onInvite={() => setSheet('referral')}
-              onTopUp={() => setSheet('topup')}
+              onQueue={() => setSheet('queue')}
             />
-            <FavoriteDrinks products={popular.slice(0, 3)} onPick={setSelected} onAdd={addToCart} />
-            <PopularCards products={popular} onNavigate={() => go('menu')} onPick={setSelected} onAdd={addToCart} />
-            <QueueInfoCard onOpen={() => go('orders')} />
           </section>
         )}
 
         {screen === 'menu' && (
           <section className="screen enter">
-            <SectionHeader title="Каталог" text="Выбери кофе, добавь настройки и оформи получение по коду." icon={<ShoppingBag />} />
+            <SectionHeader title="Что заказать?" text="Выбери напиток или еду. Нажми “Добавить”, потом корзину справа сверху." icon={<ShoppingBag />} />
+            <MenuFirstHelp />
             <CategoryTabs category={category} onChange={setCategory} />
             <div className="block-title standalone"><h2>{activeCategoryTitle}</h2><Coffee size={18} /></div>
             <div className="product-list">
               {filtered.map((product) => (
-                <ProductCard key={product.id} product={product} onPick={setSelected} onAdd={addToCart} onGift={() => { notify('success'); setSuccess('gift'); }} />
+                <ProductCard key={product.id} product={product} onPick={setSelected} onAdd={addToCart} onGift={openGift} />
               ))}
             </div>
+            <MenuPickupExplainer onOpen={() => setSheet('queue')} />
           </section>
         )}
 
         {screen === 'orders' && (
           <section className="screen enter">
-            <SectionHeader title="Заказы" text="Повтори любимый напиток или проверь ближайшую выдачу." icon={<ShoppingBag />} />
-            <ActiveOrderCard code={pickupCode} items={[
-              { product: products[0], quantity: 1 },
-              { product: products[4], quantity: 1 },
-              { product: products[1], quantity: 1 },
-              { product: products[6], quantity: 1 },
-            ]} />
-            <HistoryBlock onRepeat={() => { addToCart(products[0]); go('menu'); }} />
+            <SectionHeader title="Заказы" text="Проверь ближайшую выдачу, код бариста и историю заказов." icon={<ShoppingBag />} />
+            <ActiveOrderCard code={pickupCode} items={activeOrderItems} onDetails={() => setSheet('orderDetails')} />
+            <HistoryBlock onMenu={() => go('menu')} />
           </section>
         )}
 
@@ -268,10 +341,15 @@ export function App() {
               <div className="avatar">SN</div>
               <div><strong>Сергей</strong><span>+380 67 000 00 00</span></div>
             </div>
-            <ProfileBalance balance={animatedBalance} onTopUp={() => setSheet('topup')} onGift={() => setSheet('gift')} />
-            <ReferralProfileCard onReward={() => { setBalance((value) => value + 100); notify('success'); setSuccess('reward'); }} />
+            <ProfileBalance balance={animatedBalance} onTopUp={openTopUp} onGift={() => openGift()} />
+            <ReferralProfileCard
+              available={referralRewardAvailable}
+              onReward={withdrawReferralReward}
+              onDetails={() => setSheet('referral')}
+            />
+            <ProfileGiftsCard onGift={() => openGift()} onReceive={() => setSheet('giftReceive')} />
             <Operations />
-            <SettingsBlock onOpen={() => setSheet('settings')} />
+            <SettingsBlock onProfile={() => setSheet('settings')} onGifts={() => setSheet('giftReceive')} />
           </section>
         )}
 
@@ -280,32 +358,58 @@ export function App() {
       <CartBar
         count={cartCount}
         total={total}
-        timeMode={timeMode}
-        onTime={setTimeMode}
         onCheckout={() => setSheet('checkout')}
         visible={!selected && !success && screen === 'menu' && cartCount > 0}
       />
       {!selected && !success && <BottomNav screen={screen} onChange={go} />}
-      {selected && <ProductSheet product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onGift={() => { setSelected(null); notify('success'); setSuccess('gift'); }} />}
+      {selected && <ProductSheet product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onGift={() => { openGift(selected); setSelected(null); }} />}
       {sheet === 'checkout' && (
         <CheckoutSheet
           items={cart}
           count={cartCount}
           total={total}
           balance={animatedBalance}
+          activeOrderCode={pickupCode}
+          activeOrderMode={activeOrderMode}
           timeMode={timeMode}
           paymentMethod={paymentMethod}
+          onActiveOrderMode={setActiveOrderMode}
           onTime={setTimeMode}
           onPayment={setPaymentMethod}
           onRemove={removeFromCart}
+          onIncrement={incrementCartLine}
+          onDecrement={decrementCartLine}
+          onClear={clearCart}
+          onTopUp={() => openTopUp()}
           onClose={() => setSheet(null)}
           onConfirm={checkout}
         />
       )}
-      {sheet === 'auto' && <AutoOrderSheet onClose={() => setSheet(null)} onSaved={() => showToast('Автозаказ включен')} />}
-      {sheet === 'gift' && <GiftSheet giftMode={giftMode} onGiftMode={setGiftMode} onClose={() => setSheet(null)} onContact={() => showToast('Откроется выбор контакта Telegram')} onSend={() => { setSheet(null); setBalance((value) => value - (giftMode === 'drink' ? 112 : 250)); notify('success'); setSuccess('gift'); }} />}
-      {sheet === 'topup' && <TopUpSheet onClose={() => setSheet(null)} onTopUp={topUp} />}
-      {sheet === 'referral' && <ReferralSheet onClose={() => setSheet(null)} onReward={() => { setSheet(null); setBalance((value) => value + 100); notify('success'); setSuccess('reward'); }} />}
+      {sheet === 'gift' && (
+        <GiftSheet
+          initialProductId={giftProductId}
+          giftMode={giftMode}
+          onGiftMode={setGiftMode}
+          onClose={() => setSheet(null)}
+          onCopy={() => showToast('Ссылка на подарок скопирована')}
+          onShare={() => showToast('Откроется отправка подарка в Telegram')}
+          onDone={() => { setSheet(null); notify('success'); setSuccess('gift'); }}
+        />
+      )}
+      {sheet === 'giftReceive' && <GiftReceiveSheet onClose={() => setSheet(null)} onActivate={() => { setSheet(null); notify('success'); setSuccess('receivedGift'); }} />}
+      {sheet === 'topup' && <TopUpSheet initialAmount={topUpAmount} onClose={() => setSheet(null)} onTopUp={topUp} />}
+      {sheet === 'referral' && (
+        <ReferralSheet
+          available={referralRewardAvailable}
+          totalEarned={640}
+          onClose={() => setSheet(null)}
+          onReward={withdrawReferralReward}
+          onCopy={() => showToast('Ссылка приглашения скопирована')}
+          onShare={() => showToast('Откроется отправка в Telegram')}
+        />
+      )}
+      {sheet === 'orderDetails' && <OrderDetailsSheet code={pickupCode} items={activeOrderItems} onClose={() => setSheet(null)} />}
+      {sheet === 'queue' && <QueueSheet onClose={() => setSheet(null)} onOrders={() => { setSheet(null); go('orders'); }} />}
       {sheet === 'settings' && <SettingsSheet onClose={() => setSheet(null)} />}
       {success && <SuccessModal kind={success} code={pickupCode} onQr={() => showToast('QR-код будет доступен после подключения backend')} onClose={() => setSuccess(null)} />}
       {toast && <div className="toast" role="status">{toast}</div>}
@@ -313,98 +417,108 @@ export function App() {
   );
 }
 
-function HomeBanners({ product, onOrder, onInvite }: { product: Product; onOrder: () => void; onInvite: () => void }) {
+function BeginnerHome({
+  onMenu,
+  onTopUp,
+  onGift,
+  onInvite,
+  onQueue,
+}: {
+  onMenu: () => void;
+  onTopUp: () => void;
+  onGift: () => void;
+  onInvite: () => void;
+  onQueue: () => void;
+}) {
   return (
-    <section className="home-experience">
-      <article className="morning-stage">
-        <img src={product.image} alt="" />
-        <div className="stage-copy">
-          <span>готово через 15 минут</span>
-          <h1>Кофе к утру</h1>
-          <p>Забери по коду без очереди.</p>
+    <>
+      <section className="beginner-hero">
+        <div>
+          <span>Самое важное</span>
+          <h1>Закажи кофе и забери без очереди</h1>
+          <p>Выбираешь напиток, оплачиваешь картой или балансом, получаешь 4 цифры и называешь их бариста.</p>
         </div>
-        <div className="stage-actions">
-          <button className="primary-button hero-cta" onClick={onOrder}><Coffee size={19} />Заказать как обычно</button>
-          <button className="stage-link" aria-label="Открыть партнерскую программу" onClick={onInvite}>Соседи дают бонусы <ChevronRight size={17} /></button>
-        </div>
-      </article>
+        <button className="primary-button wide" onClick={onMenu}><Coffee size={18} />Перейти к меню</button>
+      </section>
+
+      <section className="simple-steps-card">
+        <div className="block-title"><h2>Как это работает</h2><QrCode size={18} /></div>
+        <div className="simple-step"><b>1</b><div><strong>Выбери кофе</strong><span>Нажми “Добавить” рядом с напитком.</span></div></div>
+        <div className="simple-step"><b>2</b><div><strong>Выбери время</strong><span>Сейчас, через 15 минут или ко времени.</span></div></div>
+        <div className="simple-step"><b>3</b><div><strong>Оплати и назови код</strong><span>После оплаты появятся 4 цифры для бариста.</span></div></div>
+      </section>
+
+      <section className="plain-feature-list">
+        <button onClick={onTopUp}>
+          <Wallet size={22} />
+          <div><strong>Баланс</strong><span>Бонус к пополнению</span></div>
+          <ChevronRight size={18} />
+        </button>
+        <button onClick={onGift}>
+          <Gift size={22} />
+          <div><strong>Подарить</strong><span>Кофе или сумма ссылкой</span></div>
+          <ChevronRight size={18} />
+        </button>
+        <button onClick={onInvite}>
+          <Send size={22} />
+          <div><strong>Соседи</strong><span>Награда за приглашения</span></div>
+          <ChevronRight size={18} />
+        </button>
+        <button onClick={onQueue}>
+          <QrCode size={22} />
+          <div><strong>Код выдачи</strong><span>4 цифры для бариста</span></div>
+          <ChevronRight size={18} />
+        </button>
+      </section>
+    </>
+  );
+}
+
+function MenuFirstHelp() {
+  const steps = [
+    'Добавь кофе',
+    'Корзина',
+    'Время',
+    'Код бариста',
+  ];
+
+  return (
+    <section className="menu-help-card">
+      <div className="menu-help-main">
+        <strong>Первый раз?</strong>
+        <span>Добавь напиток, выбери время и оплати.</span>
+      </div>
+      <div className="menu-help-steps">
+        {steps.map((title, index) => (
+          <span key={title}>
+            <b>{index + 1}</b>
+            {title}
+          </span>
+        ))}
+      </div>
     </section>
   );
 }
 
-function HomeActionTiles({
-  onRepeat,
-  onAuto,
-  onInvite,
-  onTopUp,
-}: {
-  onRepeat: () => void;
-  onAuto: () => void;
-  onInvite: () => void;
-  onTopUp: () => void;
-}) {
-  const actions = [
-    { title: 'Как обычно', caption: 'капучино + круассан', icon: Repeat2, onClick: onRepeat },
-    { title: 'Автозаказ', caption: 'будни в 08:30', icon: CalendarClock, onClick: onAuto },
-    { title: 'Соседи', caption: 'до 10% на баланс', icon: Send, onClick: onInvite },
-    { title: 'Пополнить', caption: '+ бонус к сумме', icon: Wallet, onClick: onTopUp },
-  ];
-
+function MenuPickupExplainer({ onOpen }: { onOpen: () => void }) {
   return (
-    <div className="command-strip">
-      {actions.map((action) => (
-        <button key={action.title} aria-label={`${action.title}: ${action.caption}`} onClick={action.onClick}>
-          <action.icon size={28} />
-          <div>
-            <strong>{action.title}</strong>
-            <span>{action.caption}</span>
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function BalanceGlassCard({ balance, onOpen }: { balance: number; onOpen: () => void }) {
-  return (
-    <button className="balance-glass-card" onClick={onOpen}>
-      <div>
-        <span>Кофейный баланс</span>
-        <strong>{money(balance)}</strong>
+    <section className="menu-pickup-card">
+      <div className="pickup-compact-icon">
+        <QrCode size={18} />
       </div>
-      <ChevronRight size={24} />
-      <b>История</b>
-    </button>
-  );
-}
-
-function NextOrderCard() {
-  return (
-    <button className="next-order-card" onClick={() => { selection(); notify('success'); }}>
-      <CalendarClock size={28} />
       <div>
-        <strong>Ближайший заказ</strong>
-        <span>Сегодня в 10:30 · Готовим</span>
+        <h2>Как забрать без очереди</h2>
+        <p>Оплати в приложении, получи 4 цифры и назови код бариста.</p>
       </div>
-      <ChevronRight size={24} />
-    </button>
+      <button className="secondary-button" onClick={onOpen}>Подробнее</button>
+    </section>
   );
 }
 
-function QueueInfoCard({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button className="pickup-story" onClick={onOpen}>
-      <div className="pickup-icon"><QrCode size={24} /></div>
-      <strong>Код вместо очереди</strong>
-      <span>Заказ уже в работе. На стойке просто называешь 4 цифры.</span>
-      <ChevronRight size={22} />
-    </button>
-  );
-}
-
-function ActiveOrderCard({ code, items }: { code: string; items: Array<{ product: Product; quantity: number }> }) {
+function ActiveOrderCard({ code, items, onDetails }: { code: string; items: Array<{ product: Product; quantity: number }>; onDetails: () => void }) {
   const visible = items.slice(0, 3);
   const hidden = Math.max(0, items.length - visible.length);
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const summary = items.map((item) => item.quantity > 1 ? `${item.product.name} ×${item.quantity}` : item.product.name).join(' · ');
 
   return (
@@ -413,7 +527,7 @@ function ActiveOrderCard({ code, items }: { code: string; items: Array<{ product
         <span>Готовим</span>
         <b>08:30</b>
       </div>
-      <div className="active-order-products" aria-label={`Состав заказа: ${summary}`}>
+      <button className="active-order-products" onClick={onDetails} aria-label={`Открыть состав заказа: ${summary}`}>
         <div className="active-order-thumbs">
           {visible.map((item) => (
             <img key={item.product.id} src={item.product.image} alt="" />
@@ -422,204 +536,16 @@ function ActiveOrderCard({ code, items }: { code: string; items: Array<{ product
         </div>
         <div>
           <span>В заказе</span>
-          <strong>{items.length} позиции</strong>
+          <strong>{productCountLabel(totalQuantity)}</strong>
         </div>
-      </div>
-      <h2>Капучино + круассан</h2>
-      <small className="active-order-summary">{summary}</small>
-      <p>Назови код бариста, когда подойдешь к стойке.</p>
+        <ChevronRight size={19} />
+      </button>
+      <h2>Заказ готовится</h2>
+      <p>Когда подойдешь к стойке, назови бариста этот код.</p>
       <div className="pickup-code">
         {code.split('').map((digit, index) => <strong key={`${digit}-${index}`}>{digit}</strong>)}
       </div>
     </section>
-  );
-}
-
-function PopularCards({ products: list, onNavigate, onPick, onAdd }: { products: Product[]; onNavigate: () => void; onPick: (p: Product) => void; onAdd: (p: Product) => void }) {
-  return (
-    <section className="drink-editorial">
-      <div className="popular-header">
-        <h2>Сегодня берут</h2>
-        <button onClick={onNavigate}>Меню <ChevronRight size={18} /></button>
-      </div>
-      <div className="drink-scroll">
-        {list.map((product) => (
-          <article className="drink-tile" key={product.id} onClick={() => onPick(product)}>
-            <img src={product.image} alt="" />
-            <div>
-              <strong>{product.name.replace(' Flat Foam', '').replace(' Vanilla Cloud', '')}</strong>
-              <span>от {money(product.price)}</span>
-            </div>
-            <button aria-label={`Добавить ${product.name}`} onClick={(event) => { event.stopPropagation(); onAdd(product); }}><Plus size={23} /></button>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SavingsPreview({ onTopUp }: { onTopUp: () => void }) {
-  return (
-    <section className="savings-card">
-      <div className="block-title">
-        <h2>Баланс делает кофе выгоднее</h2>
-        <span>+10-20%</span>
-      </div>
-      <div className="saving-lines">
-        {packages.slice(0, 3).map((pack) => (
-          <button key={pack.amount} onClick={onTopUp}>
-            <span>{money(pack.amount)} → {money(pack.amount + pack.bonus)}</span>
-            <small>+{pack.bonus} грн на баланс</small>
-          </button>
-        ))}
-      </div>
-      <button className="secondary-button wide" onClick={onTopUp}>Пополнить баланс</button>
-    </section>
-  );
-}
-
-function ValueStrip() {
-  return (
-    <div className="value-strip">
-      {valueSteps.map((step) => (
-        <div key={step.title}>
-          <strong>{step.title}</strong>
-          <span>{step.text}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function QuickActions({ onNavigate }: { onNavigate: (screen: string) => void }) {
-  return (
-    <section className="habit-card">
-      <div className="block-title">
-        <h2>Быстрые действия</h2>
-        <span>каждое утро быстрее</span>
-      </div>
-      <div className="quick-grid">
-        {quickActions.map((action) => (
-          <button key={action.id} onClick={() => onNavigate(action.screen)}>
-            <action.icon size={21} />
-            <strong>{action.title}</strong>
-            <span>{action.caption}</span>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SparklesIcon() {
-  return <Coffee size={18} />;
-}
-
-function FavoriteDrinks({ products: list, onPick, onAdd }: { products: Product[]; onPick: (p: Product) => void; onAdd: (p: Product) => void }) {
-  const first = list[0];
-  const rest = list.slice(1);
-  return (
-    <section className="ritual-panel">
-      <div className="block-title">
-        <h2>Утренний ритуал</h2>
-        <Repeat2 size={18} />
-      </div>
-      {first && (
-        <article className="ritual-main" onClick={() => onPick(first)}>
-          <img src={first.image} alt="" />
-          <div>
-            <span>обычно в 08:30</span>
-            <strong>{first.name}</strong>
-            <p>{first.tags[0]} · часто утром</p>
-          </div>
-          <button aria-label={`Добавить ${first.name}`} onClick={(event) => { event.stopPropagation(); onAdd(first); }}><Plus size={20} /></button>
-        </article>
-      )}
-      <div className="ritual-mini-list">
-        {rest.map((product) => (
-          <article className="ritual-mini" key={product.id} onClick={() => onPick(product)}>
-            <img src={product.image} alt="" />
-            <div>
-              <strong>{product.name}</strong>
-              <span>{money(product.price)}</span>
-            </div>
-            <button aria-label={`Добавить ${product.name}`} onClick={(event) => { event.stopPropagation(); onAdd(product); }}><Plus size={16} /></button>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function CatalogPreview({
-  products: list,
-  onNavigate,
-  onPick,
-  onAdd,
-}: {
-  products: Product[];
-  onNavigate: () => void;
-  onPick: (p: Product) => void;
-  onAdd: (p: Product) => void;
-}) {
-  return (
-    <section className="catalog-preview">
-      <div className="block-title">
-        <h2>Каталог</h2>
-        <button onClick={onNavigate}>Смотреть все</button>
-      </div>
-      <div className="catalog-chips">
-        {categories.slice(0, 4).map((item) => <span key={item.id}>{item.title}</span>)}
-      </div>
-      <div className="catalog-soft-grid">
-        {list.map((product) => (
-          <article key={product.id} onClick={() => onPick(product)}>
-            <img src={product.image} alt="" />
-            <strong>{product.name}</strong>
-            <div>
-              <span>{money(product.price)}</span>
-              <button aria-label={`Добавить ${product.name}`} onClick={(event) => { event.stopPropagation(); onAdd(product); }}><Plus size={15} /></button>
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function UpcomingOrders() {
-  return (
-    <section className="block">
-      <div className="block-title"><h2>Ближайшие заказы</h2><Clock3 size={18} /></div>
-      {upcomingOrders.map((order) => (
-        <div className="order-line" key={order.id}>
-          <div><strong>{order.title}</strong><span>{order.status}</span></div>
-          <b>{order.when}</b>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function ProductRail({ title, products: list, onPick, onAdd }: { title: string; products: Product[]; onPick: (p: Product) => void; onAdd: (p: Product) => void }) {
-  return (
-    <section className="block">
-      <div className="block-title"><h2>{title}</h2><Coffee size={18} /></div>
-      <div className="product-rail">
-        {list.map((product) => <ProductMini key={product.id} product={product} onPick={onPick} onAdd={onAdd} />)}
-      </div>
-    </section>
-  );
-}
-
-function ProductMini({ product, onPick, onAdd }: { product: Product; onPick: (p: Product) => void; onAdd: (p: Product) => void }) {
-  return (
-    <article className="mini-card" onClick={() => onPick(product)}>
-      <img src={product.image} alt="" />
-      <strong>{product.name}</strong>
-      <span>{money(product.price)}</span>
-      <button aria-label={`Добавить ${product.name}`} onClick={(event) => { event.stopPropagation(); onAdd(product); }}><Plus size={16} /></button>
-    </article>
   );
 }
 
@@ -689,9 +615,11 @@ function ProductCard({
       <div className="product-actions">
         <button className="gift-product-button" onClick={(event) => { event.stopPropagation(); onGift(product); }} aria-label="Подарить напиток">
           <Gift size={17} />
+          <span>Подарить</span>
         </button>
         <button className="add-product-button" onClick={(event) => { event.stopPropagation(); onAdd(product); }} aria-label="Добавить в заказ">
           <Plus size={20} />
+          <span>Добавить</span>
         </button>
       </div>
     </article>
@@ -751,7 +679,7 @@ function OptionGroup({ label, options, value, onChange }: { label: string; optio
   );
 }
 
-function CartBar({ count, total, onCheckout, visible }: { count: number; total: number; timeMode: TimeMode; onTime: (m: TimeMode) => void; onCheckout: () => void; visible: boolean }) {
+function CartBar({ count, total, onCheckout, visible }: { count: number; total: number; onCheckout: () => void; visible: boolean }) {
   if (!visible) return null;
   return (
     <aside className="cart-bar enter">
@@ -763,10 +691,10 @@ function CartBar({ count, total, onCheckout, visible }: { count: number; total: 
   );
 }
 
-function BottomSheet({ title, text, icon, onClose, children }: { title: string; text?: string; icon: JSX.Element; onClose: () => void; children: ReactNode }) {
+function BottomSheet({ title, text, icon, className, onClose, children }: { title: string; text?: string; icon: JSX.Element; className?: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="sheet-backdrop bottom-sheet-backdrop" onClick={onClose}>
-      <section className="bottom-sheet enter" onClick={(event) => event.stopPropagation()}>
+      <section className={classNames('bottom-sheet enter', className)} onClick={(event) => event.stopPropagation()}>
         <div className="sheet-handle" />
         <div className="bottom-sheet-head">
           <div className="section-icon">{icon}</div>
@@ -789,11 +717,18 @@ function CheckoutSheet({
   count,
   total,
   balance,
+  activeOrderCode,
+  activeOrderMode,
   timeMode,
   paymentMethod,
+  onActiveOrderMode,
   onTime,
   onPayment,
   onRemove,
+  onIncrement,
+  onDecrement,
+  onClear,
+  onTopUp,
   onClose,
   onConfirm,
 }: {
@@ -801,18 +736,42 @@ function CheckoutSheet({
   count: number;
   total: number;
   balance: number;
-  timeMode: TimeMode;
-  paymentMethod: PaymentMethod;
+  activeOrderCode: string;
+  activeOrderMode: ActiveOrderMode | null;
+  timeMode: TimeMode | null;
+  paymentMethod: PaymentMethod | null;
+  onActiveOrderMode: (mode: ActiveOrderMode) => void;
   onTime: (mode: TimeMode) => void;
   onPayment: (method: PaymentMethod) => void;
   onRemove: (id: string) => void;
+  onIncrement: (id: string) => void;
+  onDecrement: (id: string) => void;
+  onClear: () => void;
+  onTopUp: () => void;
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const balanceShortage = Math.max(0, total - balance);
+  const balanceInsufficient = paymentMethod === 'balance' && balanceShortage > 0;
+  const activeOrderDecisionMissing = Boolean(activeOrderCode && !activeOrderMode);
+  const canPay = Boolean(timeMode && paymentMethod && !balanceInsufficient && !activeOrderDecisionMissing);
+  const ctaText = activeOrderDecisionMissing
+    ? `К заказу ${activeOrderCode} или отдельно?`
+    : !timeMode
+      ? `Выбери время · ${money(total)}`
+      : !paymentMethod
+        ? `Выбери оплату · ${money(total)}`
+        : balanceInsufficient
+          ? `Не хватает ${money(balanceShortage)}`
+          : `Оплатить ${paymentMethod === 'balance' ? 'с баланса' : 'картой'} · ${money(total)}`;
   return (
-    <BottomSheet title="Оформление" text={`${productCountLabel(count)} · выдача по коду у бариста`} icon={<QrCode />} onClose={onClose}>
-      <div className="sheet-section">
-        <span>Что в корзине</span>
+    <BottomSheet title="Корзина" text={`${productCountLabel(count)} · выбери время и оплату`} icon={<QrCode />} className="checkout-sheet" onClose={onClose}>
+      <div className="checkout-sheet-layout">
+      <div className="sheet-section checkout-products-section">
+        <div className="checkout-section-head">
+          <span>Что в корзине</span>
+          <button onClick={onClear}>Очистить</button>
+        </div>
         <div className="checkout-items">
           {items.map((item) => {
             const itemTotal = (item.price + (item.extraShot ? 25 : 0)) * item.quantity;
@@ -824,14 +783,44 @@ function CheckoutSheet({
                   <span>{item.size} · {item.syrup}{item.extraShot ? ' · доп. эспрессо' : ''}</span>
                   <small>{item.quantity} шт · {money(itemTotal)}</small>
                 </div>
-                <button aria-label={`Удалить ${item.name}`} onClick={() => onRemove(item.lineId)}>
-                  <Trash2 size={17} />
-                </button>
+                <div className="cart-quantity-controls">
+                  <button aria-label={`Убрать одну позицию ${item.name}`} onClick={() => onDecrement(item.lineId)}>
+                    <Minus size={16} />
+                  </button>
+                  <b>{item.quantity}</b>
+                  <button aria-label={`Добавить еще одну позицию ${item.name}`} onClick={() => onIncrement(item.lineId)}>
+                    <Plus size={16} />
+                  </button>
+                  <button aria-label={`Удалить ${item.name}`} onClick={() => onRemove(item.lineId)}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               </article>
             );
           })}
         </div>
       </div>
+      {activeOrderCode && (
+        <div className="sheet-section active-order-decision">
+          <span>Уже готовится заказ с кодом {activeOrderCode}</span>
+          <div className="active-order-choice">
+            <button className={classNames(activeOrderMode === 'merge' && 'active')} onClick={() => { selection(); onActiveOrderMode('merge'); }}>
+              <QrCode size={18} />
+              <div>
+                <strong>Добавить к заказу {activeOrderCode}</strong>
+                <small>Бариста увидит это как дополнение к текущему коду.</small>
+              </div>
+            </button>
+            <button className={classNames(activeOrderMode === 'separate' && 'active')} onClick={() => { selection(); onActiveOrderMode('separate'); }}>
+              <ShoppingBag size={18} />
+              <div>
+                <strong>Оформить отдельный заказ</strong>
+                <small>Получишь новый код выдачи для второго заказа.</small>
+              </div>
+            </button>
+          </div>
+        </div>
+      )}
       <div className="sheet-section">
         <span>Когда приготовить</span>
         <div className="sheet-segment">
@@ -854,149 +843,285 @@ function CheckoutSheet({
           </button>
           <button className={classNames(paymentMethod === 'balance' && 'active')} onClick={() => onPayment('balance')}>
             <Wallet size={20} />
-            <div><strong>С баланса</strong><small>Фишка для тех, кто пополняет заранее</small></div>
+            <div><strong>С баланса</strong><small>{balance >= total ? 'Списать с кофейного баланса' : `Не хватает ${money(total - balance)}`}</small></div>
             <b>{money(balance)}</b>
           </button>
         </div>
       </div>
-      <button className="primary-button wide sheet-main-action" onClick={onConfirm}>
-        Оплатить {paymentMethod === 'balance' ? 'с баланса' : 'картой'} · {money(total)}
+      {balanceInsufficient && (
+        <div className="low-balance-notice">
+          <div>
+            <strong>На балансе не хватает {money(balanceShortage)}</strong>
+            <span>Пополни баланс с бонусом или выбери оплату картой.</span>
+          </div>
+          <button onClick={onTopUp}><Wallet size={17} />Пополнить</button>
+        </div>
+      )}
+      <button className="primary-button wide sheet-main-action" disabled={!canPay} onClick={onConfirm}>
+        {ctaText}
+      </button>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function OrderDetailsSheet({ code, items, onClose }: { code: string; items: Array<{ product: Product; quantity: number }>; onClose: () => void }) {
+  const total = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  return (
+    <BottomSheet title="Детали заказа" text="Состав, статус и код получения в одном месте." icon={<ShoppingBag />} onClose={onClose}>
+      <div className="order-detail-status">
+        <div><span>Статус</span><strong>Готовим</strong></div>
+        <div><span>Будет готов</span><strong>08:30</strong></div>
+        <div><span>Оплата</span><strong>Картой</strong></div>
+      </div>
+      <div className="sheet-section">
+        <span>Позиции</span>
+        <div className="active-order-items order-detail-items" aria-label="Позиции активного заказа">
+          {items.map((item) => (
+            <div className="active-order-item" key={item.product.id}>
+              <img src={item.product.image} alt="" />
+              <div>
+                <strong>{item.product.name}</strong>
+                <span>{item.product.tags[0]} · {item.quantity} шт</span>
+              </div>
+              <b>{money(item.product.price * item.quantity)}</b>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="order-detail-code">
+        <span>Код бариста</span>
+        <strong>{code}</strong>
+      </div>
+      <div className="sheet-total-row"><span>Итого</span><strong>{money(total)}</strong></div>
+    </BottomSheet>
+  );
+}
+
+function QueueSheet({ onClose, onOrders }: { onClose: () => void; onOrders: () => void }) {
+  return (
+    <BottomSheet title="Как работает выдача" text="Заказ готовится заранее, а на стойке ты называешь код. Никакой очереди на оплату." icon={<QrCode />} onClose={onClose}>
+      <div className="queue-steps">
+        <div><b>1</b><strong>Оформляешь в приложении</strong><span>Выбираешь время: сейчас, через 15 минут или ко времени.</span></div>
+        <div><b>2</b><strong>Получаешь 4 цифры</strong><span>Код появляется после оплаты и остается в активном заказе.</span></div>
+        <div><b>3</b><strong>Забираешь у бариста</strong><span>Называешь код, бариста отдает именно твой заказ.</span></div>
+      </div>
+      <button className="primary-button wide sheet-main-action" onClick={onOrders}>Открыть мои заказы</button>
+    </BottomSheet>
+  );
+}
+
+function GiftSheet({
+  initialProductId,
+  giftMode,
+  onGiftMode,
+  onClose,
+  onCopy,
+  onShare,
+  onDone,
+}: {
+  initialProductId: string;
+  giftMode: 'drink' | 'amount';
+  onGiftMode: (mode: 'drink' | 'amount') => void;
+  onClose: () => void;
+  onCopy: () => void;
+  onShare: () => void;
+  onDone: () => void;
+}) {
+  const [giftProductId, setGiftProductId] = useState(initialProductId);
+  const [giftPackage, setGiftPackage] = useState(packages[0].amount);
+  const [giftReady, setGiftReady] = useState(false);
+  useEffect(() => {
+    setGiftProductId(initialProductId);
+    setGiftReady(false);
+  }, [initialProductId]);
+  const selectedGift = products.find((product) => product.id === giftProductId) ?? products[1];
+  const selectedPack = packages.find((pack) => pack.amount === giftPackage) ?? packages[0];
+  const giftPrice = giftMode === 'drink' ? selectedGift.price : selectedPack.amount;
+  const giftValue = giftMode === 'drink' ? selectedGift.name : money(selectedPack.amount + selectedPack.bonus);
+  const changeGiftMode = (mode: 'drink' | 'amount') => {
+    setGiftReady(false);
+    onGiftMode(mode);
+  };
+  const changeGiftProduct = (productId: string) => {
+    selection();
+    setGiftReady(false);
+    setGiftProductId(productId);
+  };
+  const changeGiftPackage = (amount: number) => {
+    selection();
+    setGiftReady(false);
+    setGiftPackage(amount);
+  };
+  const createGift = () => {
+    notify('success');
+    setGiftReady(true);
+  };
+  return (
+    <BottomSheet title="Подарить кофе" text="Выбери напиток или бандл баланса, оплати подарок и отправь ссылку в любой чат." icon={<Gift />} onClose={onClose}>
+      <Segmented value={giftMode} onChange={changeGiftMode} left="Кофе" right="Баланс" />
+      {giftMode === 'drink' ? (
+        <div className="gift-picker-list">
+          {products.filter((product) => product.popular).map((product) => (
+            <button key={product.id} className={classNames(giftProductId === product.id && 'active')} onClick={() => changeGiftProduct(product.id)}>
+              <img src={product.image} alt="" />
+              <div><strong>{product.name}</strong><span>{product.tags[0]}</span></div>
+              <b>{money(product.price)}</b>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="gift-bundle-grid">
+          {packages.slice(0, 4).map((pack) => (
+            <button key={pack.amount} className={classNames(giftPackage === pack.amount && 'active')} onClick={() => changeGiftPackage(pack.amount)}>
+              <span>Оплатить {money(pack.amount)}</span>
+              <strong>Подарок {money(pack.amount + pack.bonus)}</strong>
+              <small>{pack.label}</small>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="gift-link-preview">
+        <span>{giftReady ? 'Ссылка готова' : 'После оплаты создадим ссылку'}</span>
+        <strong>{giftReady ? 't.me/tgcoffee_bot/app?gift=8F4C' : `Подарок: ${giftValue}`}</strong>
+        <small>{giftReady ? 'Теперь ссылку можно скопировать или сразу отправить в Telegram.' : 'Получатель откроет ссылку, увидит подарок и заберет напиток или баланс в профиле.'}</small>
+      </div>
+      <div className="gift-storage-note">
+        <Gift size={17} />
+        <div>
+          <strong>Где хранится подарок</strong>
+          <span>У отправителя ссылка остается в профиле. У получателя подарок появится после перехода по ссылке и активации.</span>
+        </div>
+      </div>
+      <div className="gift-share-actions">
+        <button className="secondary-button" disabled={!giftReady} onClick={onCopy}><BadgeCheck size={17} />Скопировать ссылку</button>
+        <button className="secondary-button" disabled={!giftReady} onClick={onDone}><X size={17} />Готово</button>
+      </div>
+      <button className="primary-button wide sheet-main-action" onClick={giftReady ? onShare : createGift}>
+        {giftReady ? <Send size={18} /> : <BadgeCheck size={18} />}
+        {giftReady ? 'Отправить в чат' : `Оплатить ${money(giftPrice)} и создать ссылку`}
       </button>
     </BottomSheet>
   );
 }
 
-function AutoOrderSheet({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  return (
-    <BottomSheet title="Автозаказ" text="Кофе будет готов к твоему обычному приходу. Перед приготовлением придет подтверждение." icon={<CalendarClock />} onClose={onClose}>
-      <div className="sheet-list">
-        <div><span>Дни</span><strong>Каждый будний день</strong></div>
-        <div><span>Время</span><strong>08:30</strong></div>
-        <div><span>Заказ</span><strong>Капучино + круассан</strong></div>
-      </div>
-      <button className="primary-button wide sheet-main-action" onClick={() => { notify('success'); onSaved(); onClose(); }}>Включить автозаказ</button>
-    </BottomSheet>
-  );
-}
-
-function GiftSheet({ giftMode, onGiftMode, onClose, onContact, onSend }: { giftMode: 'drink' | 'amount'; onGiftMode: (mode: 'drink' | 'amount') => void; onClose: () => void; onContact: () => void; onSend: () => void }) {
-  return (
-    <BottomSheet title="Подарить кофе" text="Отправь напиток или сумму на баланс контакту Telegram." icon={<Gift />} onClose={onClose}>
-      <Segmented value={giftMode} onChange={onGiftMode} left="Кофе" right="Баланс" />
-      <div className="gift-preview sheet-gift-preview">
-        <Gift size={34} />
-        <strong>{giftMode === 'drink' ? 'Латте Vanilla Cloud' : '250 грн на баланс'}</strong>
-        <span>Получатель выберет удобную кофейню</span>
-      </div>
-      <button className="secondary-button wide" onClick={() => { selection(); onContact(); }}><Contact size={18} />Выбрать контакт</button>
-      <button className="primary-button wide sheet-main-action" onClick={onSend}><Send size={18} />Отправить подарок</button>
-    </BottomSheet>
-  );
-}
-
-function TopUpSheet({ onClose, onTopUp }: { onClose: () => void; onTopUp: (amount: number, bonus: number) => void }) {
+function TopUpSheet({ initialAmount, onClose, onTopUp }: { initialAmount: number; onClose: () => void; onTopUp: (amount: number, bonus: number) => void }) {
+  const [selectedAmount, setSelectedAmount] = useState(initialAmount);
+  useEffect(() => {
+    setSelectedAmount(initialAmount);
+  }, [initialAmount]);
+  const selectedPack = packages.find((pack) => pack.amount === selectedAmount) ?? packages[1];
   return (
     <BottomSheet title="Пополнить баланс" text="Баланс не обязателен. Это способ получать больше кофе за те же деньги." icon={<Wallet />} onClose={onClose}>
+      <div className="balance-explain-card">
+        <span>Принцип простой</span>
+        <strong>Платишь меньше, на кофе получаешь больше</strong>
+        <p>Деньги сразу появляются на кофейном балансе вместе с бонусом. Потом можно платить балансом или обычной картой.</p>
+      </div>
       <div className="topup-sheet-grid">
         {packages.map((pack) => (
-          <button key={pack.amount} onClick={() => onTopUp(pack.amount, pack.bonus)}>
-            <span>{money(pack.amount)}</span>
-            <strong>{money(pack.amount + pack.bonus)}</strong>
-            <small>{pack.label}</small>
+          <button className={classNames(selectedAmount === pack.amount && 'active')} key={pack.amount} onClick={() => { selection(); setSelectedAmount(pack.amount); }}>
+            <div className="balance-equation" aria-hidden="true">
+              <span>
+                <small>С карты спишется</small>
+                <b>{money(pack.amount)}</b>
+              </span>
+              <i>→</i>
+              <span>
+                <small>На кофе будет</small>
+                <b>{money(pack.amount + pack.bonus)}</b>
+              </span>
+            </div>
+            <div className="package-value">
+              <strong>Бонус кофейни: +{money(pack.bonus)}</strong>
+              <small>{pack.label}</small>
+            </div>
           </button>
         ))}
       </div>
+      <div className="balance-result-row">
+        <span>С карты спишется {money(selectedPack.amount)}</span>
+        <strong>На баланс придет {money(selectedPack.amount + selectedPack.bonus)}</strong>
+        <small>Кофейня добавит бонус {money(selectedPack.bonus)} сразу после оплаты.</small>
+      </div>
+      <button className="primary-button wide sheet-main-action" onClick={() => onTopUp(selectedPack.amount, selectedPack.bonus)}>
+        Оплатить {money(selectedPack.amount)}
+      </button>
     </BottomSheet>
   );
 }
 
-function ReferralSheet({ onClose, onReward }: { onClose: () => void; onReward: () => void }) {
+function ReferralSheet({
+  available,
+  totalEarned,
+  onClose,
+  onReward,
+  onCopy,
+  onShare,
+}: {
+  available: number;
+  totalEarned: number;
+  onClose: () => void;
+  onReward: () => void;
+  onCopy: () => void;
+  onShare: () => void;
+}) {
+  const neighbors = [
+    { name: 'Анна', spent: 420 },
+    { name: 'Максим', spent: 500 },
+    { name: 'Оля', spent: 180 },
+  ];
   return (
     <BottomSheet title="Соседи оплачивают твой кофе" text="Приглашай соседей и получай до 10% от их заказов на кофейный баланс." icon={<Send />} onClose={onClose}>
+      <div className="referral-wallet">
+        <span>Доступно к выводу</span>
+        <strong>{money(available)}</strong>
+        <small>Награда копится здесь и попадает на баланс только после вывода. Начисление открывается после 500 грн покупок соседа.</small>
+        <button disabled={available <= 0} onClick={onReward}><Wallet size={17} />{available > 0 ? `Вывести ${money(available)} на баланс` : 'Нет суммы к выводу'}</button>
+      </div>
       <div className="referral-link sheet-referral-link">
         <span>t.me/tgcoffee_bot/app?ref=sergey</span>
-        <button onClick={onReward}><BadgeCheck size={17} />Скопировать</button>
+      </div>
+      <div className="referral-share-actions">
+        <button className="secondary-button" onClick={() => { selection(); onCopy(); }}><BadgeCheck size={17} />Скопировать</button>
+        <button className="secondary-button" onClick={() => { selection(); onShare(); }}><Send size={18} />Отправить в чат</button>
       </div>
       <div className="referral-metrics">
         <Metric label="Соседей" value="3" />
-        <Metric label="Начислено" value="200 грн" />
+        <Metric label="Всего заработано" value={money(totalEarned)} />
       </div>
-      <small className="sheet-note">Условие: начисление после 500 грн покупок через приложение.</small>
+      <div className="neighbor-list">
+        {neighbors.map((neighbor) => {
+          const progress = Math.min(100, Math.round((neighbor.spent / 500) * 100));
+          const remaining = Math.max(0, 500 - neighbor.spent);
+          return (
+            <div className="neighbor-row" key={neighbor.name}>
+              <div>
+                <strong>{neighbor.name}</strong>
+                <span>{money(neighbor.spent)} из 500 грн · {remaining > 0 ? `осталось ${money(remaining)}` : 'условие выполнено'}</span>
+              </div>
+              <div className="neighbor-progress"><i style={{ width: `${progress}%` }} /></div>
+            </div>
+          );
+        })}
+      </div>
     </BottomSheet>
   );
 }
 
 function SettingsSheet({ onClose }: { onClose: () => void }) {
   return (
-    <BottomSheet title="Настройки" text="Основные параметры Telegram Mini App." icon={<Settings2 />} onClose={onClose}>
+    <BottomSheet title="Данные профиля" text="Здесь будут данные, которые реально нужны для заказа и связи с бариста." icon={<Settings2 />} onClose={onClose}>
+      <div className="phone-access-card">
+        <strong>Телефон нужен только для связи по заказу</strong>
+        <span>При первом входе бот попросит номер одной кнопкой Telegram. Потом номер можно заменить здесь, без ручного ввода.</span>
+        <button><UserRound size={17} />Заменить номер через Telegram</button>
+      </div>
       <div className="sheet-list">
-        {['Уведомления включены', 'Кофейня: Арсенальная', 'Оплата: карта или баланс'].map((item) => (
-          <div key={item}><span>{item}</span><strong>Изменить</strong></div>
-        ))}
+        <div><span>Телефон</span><strong>+380 67 000 00 00</strong></div>
+        <div><span>Имя</span><strong>Сергей</strong></div>
       </div>
     </BottomSheet>
-  );
-}
-
-function OrderComposer({
-  cart,
-  total,
-  timeMode,
-  onTime,
-  onRemove,
-  onCheckout,
-}: {
-  cart: CartItem[];
-  total: number;
-  timeMode: TimeMode;
-  onTime: (mode: TimeMode) => void;
-  onRemove: (id: string) => void;
-  onCheckout: () => void;
-}) {
-  const first = cart[0];
-
-  return (
-    <section className="checkout-card">
-      <div className="block-title">
-        <h2>Ваш заказ</h2>
-        <Grid2X2 size={18} />
-      </div>
-      {first && (
-        <div className="checkout-item">
-          <img src={first.image} alt="" />
-          <div>
-            <strong>{first.name}</strong>
-            <span>{first.size} · {first.syrup}</span>
-            <b>{money(total)}</b>
-          </div>
-          <button onClick={() => onRemove(first.id)} aria-label="Удалить из заказа">
-            <Trash2 size={17} />
-          </button>
-        </div>
-      )}
-      <div className="checkout-times">
-        <span>Время получения</span>
-        {[
-          ['now', 'Сейчас', ''],
-          ['15', 'Через 15 минут', ''],
-          ['time', 'Ко времени', '08:30'],
-        ].map(([key, label, suffix]) => (
-          <button key={key} className={classNames(timeMode === key && 'active')} onClick={() => { selection(); onTime(key as TimeMode); }}>
-            <span>{label}</span>
-            <b>{suffix}</b>
-          </button>
-        ))}
-      </div>
-      <div className="checkout-total">
-        <strong>Итог</strong>
-        <b>{money(total)}</b>
-      </div>
-      <button className="primary-button wide" onClick={onCheckout}>
-        <QrCode size={18} />
-        Оформить заказ
-      </button>
-      <small>Начислим 11 баллов</small>
-    </section>
   );
 }
 
@@ -1029,7 +1154,7 @@ function Segmented({ value, onChange, left, right }: { value: 'drink' | 'amount'
   );
 }
 
-function ProfileBalance({ balance, onTopUp, onGift }: { balance: number; onTopUp: () => void; onGift: () => void }) {
+function ProfileBalance({ balance, onTopUp, onGift }: { balance: number; onTopUp: (amount?: number) => void; onGift: () => void }) {
   return (
     <section className="profile-balance-card">
       <div className="profile-balance-head">
@@ -1037,7 +1162,7 @@ function ProfileBalance({ balance, onTopUp, onGift }: { balance: number; onTopUp
         <strong>{money(balance)}</strong>
       </div>
       <div className="profile-balance-actions">
-        <button className="primary-button" onClick={onTopUp}>
+        <button className="primary-button" onClick={() => onTopUp()}>
           <Wallet size={18} />
           Пополнить
         </button>
@@ -1046,48 +1171,98 @@ function ProfileBalance({ balance, onTopUp, onGift }: { balance: number; onTopUp
           Подарить другу
         </button>
       </div>
-      <div className="balance-package-row">
-        {packages.slice(0, 3).map((pack) => (
-          <button key={pack.amount} onClick={onTopUp}>
-            <span>{pack.amount}</span>
-            <b>{pack.amount + pack.bonus}</b>
-          </button>
-        ))}
+      <p>Баланс не обязателен. Это способ получать больше кофе за те же деньги.</p>
+    </section>
+  );
+}
+
+function ReferralProfileCard({
+  available,
+  onReward,
+  onDetails,
+}: {
+  available: number;
+  onReward: () => void;
+  onDetails: () => void;
+}) {
+  return (
+    <section className="profile-feature-row">
+      <Send size={22} />
+      <div className="profile-feature-copy">
+        <span>Партнерка</span>
+        <strong>Соседи оплачивают твой кофе</strong>
+        <small>3 соседа · {money(available)} к выводу</small>
+      </div>
+      <div className="referral-profile-actions">
+        <button className="secondary-button" onClick={onDetails}>Подробнее</button>
+        <button className="primary-button" disabled={available <= 0} onClick={onReward}><Wallet size={18} />{available > 0 ? `Вывести ${money(available)}` : 'Нет суммы'}</button>
       </div>
     </section>
   );
 }
 
-function ReferralProfileCard({ onReward }: { onReward: () => void }) {
+function GiftReceiveSheet({ onClose, onActivate }: { onClose: () => void; onActivate: () => void }) {
   return (
-    <section className="profile-referral-card">
-      <div>
-        <span>Партнерская программа</span>
-        <h2>Соседи оплачивают твой кофе</h2>
-        <p>Приглашай соседей и получай до 10% от их заказов на свой кофейный баланс.</p>
+    <BottomSheet title="Подарок по ссылке" text="Так выглядит экран получателя после перехода по подарочной ссылке." icon={<Gift />} onClose={onClose}>
+      <div className="gift-claim-card">
+        <img src={products[1].image} alt="" />
+        <div>
+          <span>Подарок от Анны</span>
+          <strong>Латте Vanilla Cloud</strong>
+          <small>350 мл · уже оплачен отправителем</small>
+        </div>
       </div>
-      <div className="referral-metrics">
-        <Metric label="Соседей" value="3" />
-        <Metric label="Начислено" value="200 грн" />
+      <div className="gift-receive-steps">
+        <div><b>1</b><span>Открываешь ссылку в Telegram</span></div>
+        <div><b>2</b><span>Активируешь подарок в профиле</span></div>
+        <div><b>3</b><span>В кофейне получаешь код выдачи</span></div>
       </div>
-      <div className="referral-link">
-        <span>t.me/tgcoffee_bot/app?ref=sergey</span>
-        <button onClick={onReward}><BadgeCheck size={17} />Скопировать</button>
+      <div className="gift-link-preview">
+        <span>Где хранится</span>
+        <strong>Профиль · Подарки</strong>
+        <small>Если подарили баланс, сумма появится на кофейном балансе. Если напиток, он хранится как активный подарок до получения.</small>
       </div>
-      <small>Условие: начисление после 500 грн покупок через приложение.</small>
+      <button className="primary-button wide sheet-main-action" onClick={onActivate}>Активировать подарок</button>
+    </BottomSheet>
+  );
+}
+
+function ProfileGiftsCard({ onGift, onReceive }: { onGift: () => void; onReceive: () => void }) {
+  return (
+    <section className="profile-feature-row profile-gifts-row">
+      <Gift size={22} />
+      <div className="profile-feature-copy">
+        <span>Подарки</span>
+        <strong>1 активный подарок</strong>
+        <small>Создай ссылку или открой подарок, который прислали тебе.</small>
+      </div>
+      <div className="profile-gift-actions">
+        <button className="primary-button" onClick={onGift}>Создать подарок</button>
+        <button className="secondary-button" onClick={onReceive}>Открыть подарок по ссылке</button>
+      </div>
     </section>
   );
 }
 
-function SettingsBlock({ onOpen }: { onOpen: () => void }) {
+function SettingsBlock({ onProfile, onGifts }: { onProfile: () => void; onGifts: () => void }) {
   return (
-    <section className="settings-block">
-      {['Уведомления', 'Адрес кофейни', 'Способ оплаты'].map((item) => (
-        <button key={item} onClick={onOpen}>
-          <span>{item}</span>
-          <ChevronRight size={18} />
-        </button>
-      ))}
+    <section className="settings-block profile-plain-list">
+      <div className="settings-block-head">
+        <span>Данные и помощь</span>
+        <small>Только то, что нужно для заказа.</small>
+      </div>
+      <button onClick={onProfile}>
+        <UserRound size={18} />
+        <span>Телефон и имя</span>
+        <small>Номер можно заменить через Telegram</small>
+        <ChevronRight size={18} />
+      </button>
+      <button onClick={onGifts}>
+        <Gift size={18} />
+        <span>Открыть подарок по ссылке</span>
+        <small>Подарки хранятся в профиле</small>
+        <ChevronRight size={18} />
+      </button>
     </section>
   );
 }
@@ -1096,14 +1271,14 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function HistoryBlock({ onRepeat }: { onRepeat: () => void }) {
+function HistoryBlock({ onMenu }: { onMenu: () => void }) {
   return (
     <section className="block">
       <div className="block-title"><h2>История заказов</h2><History size={18} /></div>
       {orderHistory.map((order) => (
         <div className="list-row" key={order.id}>
           <div><strong>{order.title}</strong><span>{order.date} · код {order.code}</span></div>
-          <button onClick={onRepeat}><Repeat2 size={16} />Повторить</button>
+          <button onClick={onMenu}><Coffee size={16} />В меню</button>
         </div>
       ))}
     </section>
