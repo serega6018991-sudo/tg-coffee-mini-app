@@ -55,10 +55,11 @@ type Screen = 'home' | 'menu' | 'orders' | 'profile';
 type TimeMode = 'now' | '15' | 'time';
 type AppSheet = 'auto' | 'gift' | 'topup' | 'referral' | 'checkout' | 'settings' | null;
 type PaymentMethod = 'balance' | 'card';
-type CartItem = Product & { quantity: number; size: string; syrup: string; extraShot: boolean };
+type CartItem = Product & { lineId: string; quantity: number; size: string; syrup: string; extraShot: boolean };
 type SuccessKind = keyof typeof successCopy;
 
 const money = (value: number) => `${value.toLocaleString('uk-UA')} грн`;
+const cartLineId = (product: Product, size: string, syrup: string, extraShot: boolean) => `${product.id}:${size}:${syrup}:${extraShot ? 'shot' : 'base'}`;
 const productCountLabel = (count: number) => {
   const mod10 = count % 10;
   const mod100 = count % 100;
@@ -128,28 +129,33 @@ export function App() {
   const addToCart = (product: Product, overrides?: Partial<CartItem>) => {
     impact('medium');
     setToast('');
+    const size = overrides?.size ?? 'Medium';
+    const syrup = overrides?.syrup ?? 'Без сиропа';
+    const extraShot = overrides?.extraShot ?? false;
+    const lineId = cartLineId(product, size, syrup, extraShot);
     setCart((items) => {
-      const existing = items.find((item) => item.id === product.id);
+      const existing = items.find((item) => item.lineId === lineId);
       if (existing) {
-        return items.map((item) => (item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item));
+        return items.map((item) => (item.lineId === lineId ? { ...item, quantity: item.quantity + 1 } : item));
       }
       return [
         ...items,
         {
           ...product,
+          lineId,
           quantity: 1,
-          size: overrides?.size ?? 'Medium',
-          syrup: overrides?.syrup ?? 'Без сиропа',
-          extraShot: overrides?.extraShot ?? false,
+          size,
+          syrup,
+          extraShot,
         },
       ];
     });
   };
 
-  const removeFromCart = (id: string) => {
+  const removeFromCart = (lineId: string) => {
     impact('light');
     setCart((items) => {
-      const next = items.filter((item) => item.id !== id);
+      const next = items.filter((item) => item.lineId !== lineId);
       if (!next.length) window.setTimeout(() => setSheet(null), 0);
       return next;
     });
@@ -811,14 +817,14 @@ function CheckoutSheet({
           {items.map((item) => {
             const itemTotal = (item.price + (item.extraShot ? 25 : 0)) * item.quantity;
             return (
-              <article className="checkout-cart-item" key={item.id}>
+              <article className="checkout-cart-item" key={item.lineId}>
                 <img src={item.image} alt="" />
                 <div>
                   <strong>{item.name}</strong>
                   <span>{item.size} · {item.syrup}{item.extraShot ? ' · доп. эспрессо' : ''}</span>
                   <small>{item.quantity} шт · {money(itemTotal)}</small>
                 </div>
-                <button aria-label={`Удалить ${item.name}`} onClick={() => onRemove(item.id)}>
+                <button aria-label={`Удалить ${item.name}`} onClick={() => onRemove(item.lineId)}>
                   <Trash2 size={17} />
                 </button>
               </article>
